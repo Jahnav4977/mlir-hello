@@ -14,7 +14,28 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-
+#include "mlir/IR/Attributes.h"
+#include "mlir/IR/Operation.h"
+#include "mlir/IR/OperationSupport.h"
+#include "mlir/IR/Value.h"
+#include "mlir/Interfaces/FunctionImplementation.h"
+#include "mlir/Support/LLVM.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Casting.h"
+#include <algorithm>
+#include <string>
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinDialect.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Diagnostics.h"
+#include "mlir/IR/DialectRegistry.h"
+#include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/ValueRange.h"
+#include "mlir/Support/LLVM.h"
+#include "mlir/Support/TypeID.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/OpImplementation.h"
 
@@ -49,5 +70,24 @@ mlir::Operation *HelloDialect::materializeConstant(mlir::OpBuilder &builder,
                                                    mlir::Type type,
                                                    mlir::Location loc) {
   return builder.create<hello::ConstantOp>(
-      loc, type, value.cast<mlir::DenseElementsAttr>());
+      loc, type, llvm::cast<mlir::DenseElementsAttr>(value));
+}
+
+//Add Op
+void hello::AddOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
+                mlir::Value lhs, mlir::Value rhs) {
+  state.addTypes(UnrankedTensorType::get(builder.getF64Type()));
+  state.addOperands({lhs, rhs});
+}
+
+void hello::MulOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
+                mlir::Value lhs, mlir::Value rhs) {
+  state.addTypes(UnrankedTensorType::get(builder.getF64Type()));
+  state.addOperands({lhs, rhs});
+}
+
+void hello::AddMulOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
+                mlir::Value first, mlir::Value second, mlir::Value third) {
+  state.addTypes(UnrankedTensorType::get(builder.getF64Type()));
+  state.addOperands({first, second, third});
 }

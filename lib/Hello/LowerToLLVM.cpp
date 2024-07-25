@@ -38,6 +38,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "llvm/ADT/Sequence.h"
+#include "llvm/Support/Casting.h"
 
 #include <iostream>
 
@@ -51,7 +52,8 @@ public:
   mlir::LogicalResult
   matchAndRewrite(mlir::Operation *op, mlir::ArrayRef<mlir::Value> operands,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    auto memRefType = (*op->operand_type_begin()).cast<mlir::MemRefType>();
+    //auto memRefType = (*op->operand_type_begin()).cast<mlir::MemRefType>();
+    auto memRefType = llvm::cast<mlir::MemRefType>((*op->operand_type_begin()));
     auto memRefShape = memRefType.getShape();
     auto loc = op->getLoc();
 

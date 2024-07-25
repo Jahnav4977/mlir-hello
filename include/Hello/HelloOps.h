@@ -21,9 +21,14 @@
 #include "mlir/Bytecode/BytecodeOpInterface.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Dialect.h"
-#include "mlir/IR/OpDefinition.h"
+#include "mlir/IR/SymbolTable.h"
+#include "mlir/Interfaces/CallInterfaces.h"
+#include "mlir/Interfaces/CastInterfaces.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/IR/OpDefinition.h"
+#include "mlir/IR/ValueRange.h"
+#include "mlir/IR/Value.h"
 
 #define GET_OP_CLASSES
 #include "Hello/HelloOps.h.inc"

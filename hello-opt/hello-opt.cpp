@@ -14,7 +14,35 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+#include "mlir/Dialect/Func/Extensions/AllExtensions.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/Bufferization/Transforms/Bufferize.h"
+#include "mlir/Dialect/Bufferization/IR/Bufferization.h"
+#include "mlir/Dialect/Bufferization/Pipelines/Passes.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Tensor/IR/TensorInferTypeOpInterfaceImpl.h"
+#include "mlir/Dialect/Tensor/IR/TensorTilingInterfaceImpl.h"
+#include "mlir/Dialect/Tensor/IR/ValueBoundsOpInterfaceImpl.h"
+#include "mlir/Dialect/Tensor/TransformOps/TensorTransformOps.h"
+#include "mlir/Dialect/Tensor/Transforms/BufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/Tensor/Transforms/SubsetInsertionOpInterfaceImpl.h"
+#include "mlir/Dialect/Linalg/Transforms/AllInterfaces.h"
+#include "mlir/Dialect/Linalg/Transforms/RuntimeOpVerification.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Bufferization/Transforms/FuncBufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/Tosa/IR/ShardingInterfaceImpl.h"
+#include "mlir/Dialect/Tosa/IR/TosaOps.h"
+#include "mlir/Dialect/Transform/IR/TransformDialect.h"
+#include "mlir/Dialect/Transform/PDLExtension/PDLExtension.h"
+#include <iostream>
 
+#include "mlir/Dialect/Affine/Passes.h"
+#include "mlir/Dialect/LLVMIR/Transforms/Passes.h"
+#include "mlir/IR/AsmState.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/Verifier.h"
+#include "mlir/InitAllDialects.h"
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
 #include "mlir/ExecutionEngine/OptUtils.h"
 #include "mlir/IR/MLIRContext.h"
@@ -26,21 +54,60 @@
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
+#include "mlir/Transforms/Passes.h"
 
+#include "llvm/ADT/StringRef.h"
+#include "llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/ToolOutputFile.h"
+#include "llvm/Support/ErrorOr.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
-#include "llvm/Support/ToolOutputFile.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/Casting.h"
+#include <cassert>
+#include <memory>
+#include <string>
+#include <system_error>
+#include <utility>
 
 #include "Hello/HelloDialect.h"
+#include "Hello/HelloOps.h"
 #include "Hello/HelloPasses.h"
+#include "Hello/AST.h"
+#include "Hello/Lexer.h"
+#include "Hello/Parser.h"
 
 namespace cl = llvm::cl;
 static cl::opt<std::string> inputFilename(cl::Positional,
                                           cl::desc("<input hello file>"),
                                           cl::init("-"),
                                           cl::value_desc("filename"));
+                                          
+namespace {
+enum InputType { Hello, MLIR };
+} // namespace
+static cl::opt<enum InputType> inputType(
+    "x", cl::init(Hello), cl::desc("Decided the kind of output desired"),
+    cl::values(clEnumValN(Hello, "hello", "load the input file as a Toy source.")),
+    cl::values(clEnumValN(MLIR, "mlir",
+                          "load the input file as an MLIR file")));
+                          
+/// Returns a Toy AST resulting from parsing the file or a nullptr on error.
+std::unique_ptr<hello::ModuleAST> parseInputFile(llvm::StringRef filename) {
+  llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr =
+      llvm::MemoryBuffer::getFileOrSTDIN(filename);
+  if (std::error_code ec = fileOrErr.getError()) {
+    llvm::errs() << "Could not open input file: " << ec.message() << "\n";
+    return nullptr;
+  }
+  auto buffer = fileOrErr.get()->getBuffer();
+  hello::LexerBuffer lexer(buffer.begin(), buffer.end(), std::string(filename));
+  hello::Parser parser(lexer);
+  return parser.parseModule();
+}
 
 int dumpLLVMIR(mlir::ModuleOp module) {
   mlir::registerBuiltinDialectTranslation(*module->getContext());
@@ -83,7 +150,9 @@ int dumpLLVMIR(mlir::ModuleOp module) {
 }
 
 int loadMLIR(mlir::MLIRContext &context,
-             mlir::OwningOpRef<mlir::ModuleOp> &module) {
+             mlir::OwningOpRef<mlir::ModuleOp> &module) {       
+  // Handle '.toy' input to the compiler.
+  
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr =
       llvm::MemoryBuffer::getFileOrSTDIN(inputFilename);
   if (std::error_code ec = fileOrErr.getError()) {
@@ -106,19 +175,40 @@ int loadAndProcessMLIR(mlir::MLIRContext &context,
   if (int error = loadMLIR(context, module)) {
     return error;
   }
-
+  
   // Register passes to be applied in this compile process
   mlir::PassManager passManager(&context);
   if (mlir::failed(mlir::applyPassManagerCLOptions(passManager)))
     return 4;
+  
+  passManager.addPass(hello::createLowerToTosaPass());
+  passManager.addNestedPass<mlir::func::FuncOp>(mlir::tosa::createTosaToLinalg());
 
-  passManager.addPass(hello::createLowerToAffinePass());
-  passManager.addPass(hello::createLowerToLLVMPass());
-
+  mlir::bufferization::OneShotBufferizationOptions bufferizationOptions;
+  bufferizationOptions.bufferizeFunctionBoundaries = true;
+  bufferizationOptions.allowUnknownOps = 1;
+  passManager.addPass(mlir::bufferization::createOneShotBufferizePass());
+  mlir::bufferization::BufferDeallocationPipelineOptions deallocationOptions;
+  mlir::bufferization::buildBufferDeallocationPipeline(passManager,
+                                                       deallocationOptions);
+  passManager.addPass(mlir::func::createFuncBufferizePass());
+  passManager.addPass(mlir::createConvertVectorToSCFPass());
+  passManager.addNestedPass<mlir::func::FuncOp>(mlir::createConvertLinalgToAffineLoopsPass());
+  passManager.addNestedPass<mlir::func::FuncOp>(mlir::createLowerAffinePass());
+  passManager.addPass(mlir::createConvertSCFToCFPass());
+  passManager.addPass(mlir::createCanonicalizerPass());
+  
+  passManager.addPass(mlir::createArithToLLVMConversionPass());
+  passManager.addPass(mlir::createConvertFuncToLLVMPass());
+  passManager.addPass(mlir::createConvertControlFlowToLLVMPass());
+  passManager.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
+  passManager.addPass(mlir::createReconcileUnrealizedCastsPass());
+  
   if (mlir::failed(passManager.run(*module))) {
     return 4;
   }
-
+  //std::cout<<"jkgdg"<<std::endl;
+  module->dump();
   return 0;
 }
 
@@ -154,20 +244,30 @@ int runJit(mlir::ModuleOp module) {
 }
 
 int main(int argc, char **argv) {
+  mlir::registerAsmPrinterCLOptions();
   mlir::registerMLIRContextCLOptions();
   mlir::registerPassManagerCLOptions();
 
   cl::ParseCommandLineOptions(argc, argv, "Hello compiler\n");
-  mlir::MLIRContext context;
+  mlir::DialectRegistry registry;
+  //mlir::func::registerAllExtensions(registry);
+  mlir::tensor::registerBufferizableOpInterfaceExternalModels(registry);
+  mlir::linalg::registerAllDialectInterfaceImplementations(registry);
+  mlir::bufferization::func_ext::registerBufferizableOpInterfaceExternalModels(
+       registry);
+  mlir::MLIRContext context(registry);
+  //mlir::MLIRContext context;
+
   context.getOrLoadDialect<hello::HelloDialect>();
   context.getOrLoadDialect<mlir::func::FuncDialect>();
+  context.getOrLoadDialect<mlir::tensor::TensorDialect>();
+  
 
   mlir::OwningOpRef<mlir::ModuleOp> module;
   if (int error = loadAndProcessMLIR(context, module)) {
     return error;
   }
-
-  dumpLLVMIR(*module);
+  //dumpLLVMIR(*module);
   //  runJit(*module);
 
   return 0;

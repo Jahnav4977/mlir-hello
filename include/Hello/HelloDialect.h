@@ -18,11 +18,19 @@
 #ifndef HELLO_HELLODIALECT_H
 #define HELLO_HELLODIALECT_H
 
+#include "mlir/Bytecode/BytecodeOpInterface.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Dialect.h"
+#include "mlir/IR/SymbolTable.h"
+#include "mlir/Interfaces/CallInterfaces.h"
+#include "mlir/Interfaces/CastInterfaces.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/IR/BuiltinDialect.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/IR/Value.h"
 
 #include "Hello/HelloOpsDialect.h.inc"
 

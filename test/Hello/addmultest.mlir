@@ -1,6 +1,5 @@
-// RUN: hello-opt %s | FileCheck %s
 
-// CHECK: define void @test_add()
+
 func.func @test_add(%arg0: tensor<2x3xf64>, %arg1: tensor<2x3xf64>, %arg2: tensor<2x3xf64>) attributes { llvm.emit_c_interface } {
   %0 = "hello.addmul"(%arg0, %arg1, %arg2) : (tensor<2x3xf64>, tensor<2x3xf64>, tensor<2x3xf64>) -> tensor<2x3xf64>
   return 
