@@ -1,8 +1,6 @@
 add_mlir_dialect_library(MLIRHello
 		HelloDialect.cpp
 		HelloOps.cpp
-		LowerToAffine.cpp
-		LowerToLLVM.cpp
 		LowerToTosa.cpp
 
         ADDITIONAL_HEADER_DIRS

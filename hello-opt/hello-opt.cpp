@@ -76,82 +76,16 @@
 #include "Hello/HelloDialect.h"
 #include "Hello/HelloOps.h"
 #include "Hello/HelloPasses.h"
-#include "Hello/AST.h"
-#include "Hello/Lexer.h"
-#include "Hello/Parser.h"
 
 namespace cl = llvm::cl;
 static cl::opt<std::string> inputFilename(cl::Positional,
                                           cl::desc("<input hello file>"),
                                           cl::init("-"),
                                           cl::value_desc("filename"));
-                                          
-namespace {
-enum InputType { Hello, MLIR };
-} // namespace
-static cl::opt<enum InputType> inputType(
-    "x", cl::init(Hello), cl::desc("Decided the kind of output desired"),
-    cl::values(clEnumValN(Hello, "hello", "load the input file as a Toy source.")),
-    cl::values(clEnumValN(MLIR, "mlir",
-                          "load the input file as an MLIR file")));
-                          
-/// Returns a Toy AST resulting from parsing the file or a nullptr on error.
-std::unique_ptr<hello::ModuleAST> parseInputFile(llvm::StringRef filename) {
-  llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr =
-      llvm::MemoryBuffer::getFileOrSTDIN(filename);
-  if (std::error_code ec = fileOrErr.getError()) {
-    llvm::errs() << "Could not open input file: " << ec.message() << "\n";
-    return nullptr;
-  }
-  auto buffer = fileOrErr.get()->getBuffer();
-  hello::LexerBuffer lexer(buffer.begin(), buffer.end(), std::string(filename));
-  hello::Parser parser(lexer);
-  return parser.parseModule();
-}
 
-int dumpLLVMIR(mlir::ModuleOp module) {
-  mlir::registerBuiltinDialectTranslation(*module->getContext());
-  mlir::registerLLVMDialectTranslation(*module->getContext());
-  // Convert the module to LLVM IR in a new LLVM IR context.
-
-  llvm::LLVMContext llvmContext;
-  auto llvmModule = mlir::translateModuleToLLVMIR(module, llvmContext);
-  if (!llvmModule) {
-    llvm::errs() << "Failed to emit LLVM IR\n";
-    return -1;
-  }
-
-  // Initialize LLVM targets.
-  llvm::InitializeNativeTarget();
-  llvm::InitializeNativeTargetAsmPrinter();
-  auto tmBuilderOrError = llvm::orc::JITTargetMachineBuilder::detectHost();
-  if (!tmBuilderOrError) {
-    llvm::errs() << "Could not create JITTargetMachineBuilder\n";
-    return -1;
-  }
-  auto tmOrError = tmBuilderOrError->createTargetMachine();
-  if (!tmOrError) {
-    llvm::errs() << "Could not create TargetMachine\n";
-    return -1;
-  }
-  mlir::ExecutionEngine::setupTargetTripleAndDataLayout(llvmModule.get(),
-                                                        tmOrError.get().get());
-  ;
-  //  mlir::ExecutionEngine::setupTargetTriple(llvmModule.get());
-
-  // Optionally run an optimization pipeline over the llvm module.
-  auto optPipeline = mlir::makeOptimizingTransformer(0, 0, nullptr);
-  if (auto err = optPipeline(llvmModule.get())) {
-    llvm::errs() << "Failed to optimize LLVM IR " << err << "\n";
-    return -1;
-  }
-  llvm::outs() << *llvmModule << "\n";
-  return 0;
-}
 
 int loadMLIR(mlir::MLIRContext &context,
              mlir::OwningOpRef<mlir::ModuleOp> &module) {       
-  // Handle '.toy' input to the compiler.
   
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr =
       llvm::MemoryBuffer::getFileOrSTDIN(inputFilename);
@@ -183,7 +117,7 @@ int loadAndProcessMLIR(mlir::MLIRContext &context,
   
   passManager.addPass(hello::createLowerToTosaPass());
   passManager.addNestedPass<mlir::func::FuncOp>(mlir::tosa::createTosaToLinalg());
-
+  //Buferrization is mandatory before using linalg to affine loops pass
   mlir::bufferization::OneShotBufferizationOptions bufferizationOptions;
   bufferizationOptions.bufferizeFunctionBoundaries = true;
   bufferizationOptions.allowUnknownOps = 1;
@@ -196,50 +130,20 @@ int loadAndProcessMLIR(mlir::MLIRContext &context,
   passManager.addNestedPass<mlir::func::FuncOp>(mlir::createConvertLinalgToAffineLoopsPass());
   passManager.addNestedPass<mlir::func::FuncOp>(mlir::createLowerAffinePass());
   passManager.addPass(mlir::createConvertSCFToCFPass());
+  //Cannonicalizer pass is used to clean ir.
   passManager.addPass(mlir::createCanonicalizerPass());
   
   passManager.addPass(mlir::createArithToLLVMConversionPass());
   passManager.addPass(mlir::createConvertFuncToLLVMPass());
   passManager.addPass(mlir::createConvertControlFlowToLLVMPass());
   passManager.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
+  //converts all unrealizedcasts to llvm
   passManager.addPass(mlir::createReconcileUnrealizedCastsPass());
   
   if (mlir::failed(passManager.run(*module))) {
     return 4;
   }
-  //std::cout<<"jkgdg"<<std::endl;
   module->dump();
-  return 0;
-}
-
-int runJit(mlir::ModuleOp module) {
-  // Initialize LLVM targets.
-  llvm::InitializeNativeTarget();
-  llvm::InitializeNativeTargetAsmPrinter();
-
-  // Register the translation from MLIR to LLVM IR, which must happen before we
-  // can JIT-compile.
-  mlir::registerLLVMDialectTranslation(*module->getContext());
-
-  // An optimization pipeline to use within the execution engine.
-  auto optPipeline = mlir::makeOptimizingTransformer(0, /*sizeLevel=*/0,
-                                                     /*targetMachine=*/nullptr);
-
-  // Create an MLIR execution engine. The execution engine eagerly JIT-compiles
-  // the module.
-  mlir::ExecutionEngineOptions engineOptions;
-  engineOptions.transformer = optPipeline;
-  auto maybeEngine = mlir::ExecutionEngine::create(module, engineOptions);
-  assert(maybeEngine && "failed to construct an execution engine");
-  auto &engine = maybeEngine.get();
-
-  // Invoke the JIT-compiled function.
-  auto invocationResult = engine->invokePacked("main");
-  if (invocationResult) {
-    llvm::errs() << "JIT invocation failed\n";
-    return -1;
-  }
-
   return 0;
 }
 
@@ -250,13 +154,13 @@ int main(int argc, char **argv) {
 
   cl::ParseCommandLineOptions(argc, argv, "Hello compiler\n");
   mlir::DialectRegistry registry;
-  //mlir::func::registerAllExtensions(registry);
+  
+  //These extensions are needed to implement one shot bufferize.
   mlir::tensor::registerBufferizableOpInterfaceExternalModels(registry);
   mlir::linalg::registerAllDialectInterfaceImplementations(registry);
   mlir::bufferization::func_ext::registerBufferizableOpInterfaceExternalModels(
        registry);
   mlir::MLIRContext context(registry);
-  //mlir::MLIRContext context;
 
   context.getOrLoadDialect<hello::HelloDialect>();
   context.getOrLoadDialect<mlir::func::FuncDialect>();
@@ -267,8 +171,6 @@ int main(int argc, char **argv) {
   if (int error = loadAndProcessMLIR(context, module)) {
     return error;
   }
-  //dumpLLVMIR(*module);
-  //  runJit(*module);
 
   return 0;
 }

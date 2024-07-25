@@ -25,7 +25,7 @@ def execute():
   return %0 : tensor<2x3xf64>
 }"""
         hello_process = subprocess.run(
-            ['build/bin/hello-opt'],
+            ['../../build/bin/hello-opt'],
             input=input,
             capture_output=True,
             encoding='ascii',

@@ -47,26 +47,3 @@ add_subdirectory(lib)
 add_subdirectory(test)
 add_subdirectory(hello-opt)
 
-#python bindings 
-if(MLIR_ENABLE_BINDINGS_PYTHON)
-  include(MLIRDetectPythonEnv)
-  mlir_configure_python_dev_packages()
-endif()
-
-if(MLIR_ENABLE_BINDINGS_PYTHON)
-  # If parent projects want to configure where to place the python packages,
-  # respect that.
-  if(NOT TORCH_MLIR_PYTHON_PACKAGES_DIR)
-    set(TORCH_MLIR_PYTHON_PACKAGES_DIR "${CMAKE_CURRENT_BINARY_DIR}/python_packages")
-  endif()
-endif()
-
-if(MLIR_ENABLE_BINDINGS_PYTHON)
-  declare_mlir_python_sources(HelloMLIRPythonHelloExtensionsSources)
-endif()
-
-if(MLIR_ENABLE_BINDINGS_PYTHON)
-  add_subdirectory(python)
-endif()
-
-message(STATUS "TORCH_MLIR_PYTHON_PACKAGES_DIR is set to: ${TORCH_MLIR_PYTHON_PACKAGES_DIR}")
