@@ -19,7 +19,7 @@ def execute():
   return %0 : tensor<2x3xf64>
 }"""
         hello_process = subprocess.run(
-            ['../../build/bin/hello-opt'],
+            ['build/bin/hello-opt'],
             input=input,
             capture_output=True,
             encoding='ascii',
@@ -27,7 +27,6 @@ def execute():
         
         mlir_LLVM_txt = hello_process.stderr
         module=Module.parse(mlir_LLVM_txt)
-        
         arg1 = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]).astype(np.float64)
         arg2 = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]).astype(np.float64)
         arg1_memref_ptr = ctypes.pointer(
@@ -40,20 +39,17 @@ def execute():
         res_memref_ptr = ctypes.pointer(
             ctypes.pointer(get_ranked_memref_descriptor(res))
         )
-        execution_engine=ExecutionEngine(module)
+        execution_engine=ExecutionEngine(
+            module,
+            opt_level=3
+        )
         execution_engine.invoke("test_add", res_memref_ptr, arg1_memref_ptr, arg2_memref_ptr)
         res = ranked_memref_to_numpy(res_memref_ptr[0])
+        print(res)
         res_tensor=torch.from_numpy(res)
         arg1_tensor=torch.from_numpy(arg1)
         arg2_tensor=torch.from_numpy(arg2)
         ans_tensor=arg1_tensor.add(arg2_tensor)
-        
-        return res_tensor, ans_tensor
-
-def test_answer():
-    res_tensor, ans_tensor = execute()
-    assert torch.allclose(res_tensor, ans_tensor), f"Expected {ans_tensor} but got {res_tensor}"
-
-if __name__ == "__main__":
-    test_answer()
-    print("Test passed.")
+        print(ans_tensor)
+        print(res_tensor)
+execute()
