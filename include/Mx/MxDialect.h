@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#ifndef HELLO_HELLODIALECT_H
-#define HELLO_HELLODIALECT_H
+#ifndef MX_MXDIALECT_H
+#define MX_MXDIALECT_H
 
 #include "mlir/Bytecode/BytecodeOpInterface.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -31,7 +31,8 @@
 #include "mlir/IR/Dialect.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/IR/Value.h"
+#include "mlir/Dialect/Quant/QuantOps.h"
 
-#include "Hello/HelloOpsDialect.h.inc"
+#include "Mx/MxOpsDialect.h.inc"
 
-#endif // HELLO_HELLODIALECT_H
+#endif // MX_MXDIALECT_H

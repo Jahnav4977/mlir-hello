@@ -16,12 +16,12 @@ from lit.llvm.subst import FindTool
 # Configuration file for the 'lit' test runner.
 
 # name: The name of this test suite.
-config.name = 'HELLO'
+config.name = 'MX'
 
 config.test_format = lit.formats.ShTest(not llvm_config.use_lit_shell)
 
 # suffixes: A list of file extensions to treat as test files.
-config.suffixes = ['.hello',
+config.suffixes = ['.mx',
                    '.mlir'
                   ]
 
@@ -29,7 +29,7 @@ config.suffixes = ['.hello',
 config.test_source_root = os.path.dirname(__file__)
 
 # test_exec_root: The root path where tests should be run.
-config.test_exec_root = os.path.join(config.hello_obj_root, 'test')
+config.test_exec_root = os.path.join(config.mx_obj_root, 'test')
 
 config.substitutions.append(('%PATH%', config.environment['PATH']))
 config.substitutions.append(('%shlibext', config.llvm_shlib_ext))
@@ -48,16 +48,16 @@ config.excludes = ['Inputs', 'Examples', 'CMakeLists.txt', 'README.txt', 'LICENS
 config.test_source_root = os.path.dirname(__file__)
 
 # test_exec_root: The root path where tests should be run.
-config.test_exec_root = os.path.join(config.hello_obj_root, 'test')
-config.hello_tools_dir = os.path.join(config.hello_obj_root, 'bin')
+config.test_exec_root = os.path.join(config.mx_obj_root, 'test')
+config.mx_tools_dir = os.path.join(config.mx_obj_root, 'bin')
 
 # Tweak the PATH to include the tools dir.
 llvm_config.with_environment('PATH', config.llvm_tools_dir, append_path=True)
 
-tool_dirs = [config.hello_tools_dir, config.llvm_tools_dir]
+tool_dirs = [config.mx_tools_dir, config.llvm_tools_dir]
 tools = [
     'mlir-opt',
-    'hello-opt'
+    'mx-opt'
 ]
 
 llvm_config.add_tool_substitutions(tools, tool_dirs)

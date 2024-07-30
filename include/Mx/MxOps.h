@@ -15,15 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#ifndef MLIR_HELLO_PASSES_H
-#define MLIR_HELLO_PASSES_H
+#ifndef MX_MXOPS_H
+#define MX_MXOPS_H
 
-#include <memory>
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Pass/Pass.h"
+#include "mlir/Bytecode/BytecodeOpInterface.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Dialect.h"
+#include "mlir/IR/SymbolTable.h"
+#include "mlir/Interfaces/CallInterfaces.h"
+#include "mlir/Interfaces/CastInterfaces.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/IR/OpDefinition.h"
+#include "mlir/IR/ValueRange.h"
+#include "mlir/IR/Value.h"
+#include "mlir/Dialect/Quant/QuantOps.h"
 
-namespace hello {
-std::unique_ptr<mlir::Pass> createLowerToTosaPass();
-} // namespace hello
+#define GET_OP_CLASSES
+#include "Mx/MxOps.h.inc"
 
-#endif // MLIR_HELLO_PASSES_H
+#endif // MX_MXOPS_H

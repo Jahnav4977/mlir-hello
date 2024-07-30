@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 #include "mlir/IR/Attributes.h"
+#include "mlir/Dialect/Quant/QuantOps.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/IR/Value.h"
@@ -39,55 +40,58 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/OpImplementation.h"
 
-#include "Hello/HelloDialect.h"
-#include "Hello/HelloOps.h"
+#include "Mx/MxDialect.h"
+#include "Mx/MxOps.h"
 
 using namespace mlir;
-using namespace hello;
+using namespace mx;
 
 //===----------------------------------------------------------------------===//
-// Hello dialect.
+// mx dialect.
 //===----------------------------------------------------------------------===//
 
-#include "Hello/HelloOpsDialect.cpp.inc"
+#include "Mx/MxOpsDialect.cpp.inc"
 
-void HelloDialect::initialize() {
+void MxDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
-#include "Hello/HelloOps.cpp.inc"
+#include "Mx/MxOps.cpp.inc"
       >();
 }
 
-void hello::ConstantOp::build(mlir::OpBuilder &builder,
+void mx::ConstantOp::build(mlir::OpBuilder &builder,
                               mlir::OperationState &state, double value) {
   auto dataType = RankedTensorType::get({}, builder.getF64Type());
   auto dataAttribute = DenseElementsAttr::get(dataType, value);
-  hello::ConstantOp::build(builder, state, dataType, dataAttribute);
+  mx::ConstantOp::build(builder, state, dataType, dataAttribute);
 }
 
-mlir::Operation *HelloDialect::materializeConstant(mlir::OpBuilder &builder,
+mlir::Operation *MxDialect::materializeConstant(mlir::OpBuilder &builder,
                                                    mlir::Attribute value,
                                                    mlir::Type type,
                                                    mlir::Location loc) {
-  return builder.create<hello::ConstantOp>(
+  return builder.create<mx::ConstantOp>(
       loc, type, llvm::cast<mlir::DenseElementsAttr>(value));
 }
 
 //Add Op
-void hello::AddOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
+void mx::AddOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
                 mlir::Value lhs, mlir::Value rhs) {
-  state.addTypes(UnrankedTensorType::get(builder.getF64Type()));
+  auto dataType=llvm::dyn_cast<UnrankedTensorType>(lhs.getType());
+  state.addTypes(dataType);
   state.addOperands({lhs, rhs});
 }
 
-void hello::MulOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
+void mx::MulOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
                 mlir::Value lhs, mlir::Value rhs) {
-  state.addTypes(UnrankedTensorType::get(builder.getF64Type()));
+  auto dataType=llvm::dyn_cast<UnrankedTensorType>(lhs.getType());
+  state.addTypes(dataType);
   state.addOperands({lhs, rhs});
 }
 
-void hello::AddMulOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
+void mx::AddMulOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
                 mlir::Value first, mlir::Value second, mlir::Value third) {
-  state.addTypes(UnrankedTensorType::get(builder.getF64Type()));
+  auto dataType=llvm::dyn_cast<UnrankedTensorType>(first.getType());
+  state.addTypes(dataType);
   state.addOperands({first, second, third});
 }

@@ -28,8 +28,11 @@
 #include "mlir/Dialect/Tensor/Transforms/SubsetInsertionOpInterfaceImpl.h"
 #include "mlir/Dialect/Linalg/Transforms/AllInterfaces.h"
 #include "mlir/Dialect/Linalg/Transforms/RuntimeOpVerification.h"
+#include "mlir/Dialect/Arith/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Bufferization/Transforms/FuncBufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/SCF/Transforms/BufferDeallocationOpInterfaceImpl.h"
+#include "mlir/Dialect/MemRef/Transforms/AllocationOpInterfaceImpl.h"
 #include "mlir/Dialect/Tosa/IR/ShardingInterfaceImpl.h"
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
 #include "mlir/Dialect/Transform/IR/TransformDialect.h"
@@ -73,13 +76,13 @@
 #include <system_error>
 #include <utility>
 
-#include "Hello/HelloDialect.h"
-#include "Hello/HelloOps.h"
-#include "Hello/HelloPasses.h"
+#include "Mx/MxDialect.h"
+#include "Mx/MxOps.h"
+#include "Mx/MxPasses.h"
 
 namespace cl = llvm::cl;
 static cl::opt<std::string> inputFilename(cl::Positional,
-                                          cl::desc("<input hello file>"),
+                                          cl::desc("<input mx file>"),
                                           cl::init("-"),
                                           cl::value_desc("filename"));
 
@@ -115,16 +118,19 @@ int loadAndProcessMLIR(mlir::MLIRContext &context,
   if (mlir::failed(mlir::applyPassManagerCLOptions(passManager)))
     return 4;
   
-  passManager.addPass(hello::createLowerToTosaPass());
+  passManager.addPass(mx::createLowerToTosaPass());
+  passManager.addPass(mlir::tosa::createTosaToArith());
+  passManager.addNestedPass<mlir::func::FuncOp>(mlir::tosa::createTosaToLinalgNamed());
   passManager.addNestedPass<mlir::func::FuncOp>(mlir::tosa::createTosaToLinalg());
   //Buferrization is mandatory before using linalg to affine loops pass
   mlir::bufferization::OneShotBufferizationOptions bufferizationOptions;
-  bufferizationOptions.bufferizeFunctionBoundaries = true;
+  //bufferizationOptions.bufferizeFunctionBoundaries = true;
   bufferizationOptions.allowUnknownOps = 1;
   passManager.addPass(mlir::bufferization::createOneShotBufferizePass());
-  mlir::bufferization::BufferDeallocationPipelineOptions deallocationOptions;
-  mlir::bufferization::buildBufferDeallocationPipeline(passManager,
-                                                       deallocationOptions);
+  //mlir::bufferization::BufferDeallocationPipelineOptions deallocationOptions;
+  //mlir::bufferization::buildBufferDeallocationPipeline(passManager,
+  //                                                     deallocationOptions);
+  //passManager.addNestedPass<mlir::func::FuncOp>(mlir::bufferization::createBufferDeallocationPass());
   passManager.addPass(mlir::func::createFuncBufferizePass());
   passManager.addPass(mlir::createConvertVectorToSCFPass());
   passManager.addNestedPass<mlir::func::FuncOp>(mlir::createConvertLinalgToAffineLoopsPass());
@@ -133,10 +139,13 @@ int loadAndProcessMLIR(mlir::MLIRContext &context,
   //Cannonicalizer pass is used to clean ir.
   passManager.addPass(mlir::createCanonicalizerPass());
   
+  passManager.addPass(mlir::createConvertMathToLLVMPass());
+  passManager.addPass(mlir::createConvertMathToLibmPass());
   passManager.addPass(mlir::createArithToLLVMConversionPass());
   passManager.addPass(mlir::createConvertFuncToLLVMPass());
   passManager.addPass(mlir::createConvertControlFlowToLLVMPass());
   passManager.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
+  passManager.addPass(mlir::createConvertIndexToLLVMPass());
   //converts all unrealizedcasts to llvm
   passManager.addPass(mlir::createReconcileUnrealizedCastsPass());
   
@@ -152,17 +161,19 @@ int main(int argc, char **argv) {
   mlir::registerMLIRContextCLOptions();
   mlir::registerPassManagerCLOptions();
 
-  cl::ParseCommandLineOptions(argc, argv, "Hello compiler\n");
+  cl::ParseCommandLineOptions(argc, argv,"MX compiler\n");
   mlir::DialectRegistry registry;
   
   //These extensions are needed to implement one shot bufferize.
   mlir::tensor::registerBufferizableOpInterfaceExternalModels(registry);
   mlir::linalg::registerAllDialectInterfaceImplementations(registry);
+  mlir::arith::registerBufferizableOpInterfaceExternalModels(registry);
   mlir::bufferization::func_ext::registerBufferizableOpInterfaceExternalModels(
        registry);
+  mlir::memref::registerAllocationOpInterfaceExternalModels(registry);
   mlir::MLIRContext context(registry);
 
-  context.getOrLoadDialect<hello::HelloDialect>();
+  context.getOrLoadDialect<mx::MxDialect>();
   context.getOrLoadDialect<mlir::func::FuncDialect>();
   context.getOrLoadDialect<mlir::tensor::TensorDialect>();
   

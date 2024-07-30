@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#include "Hello/HelloOps.h"
-#include "Hello/HelloDialect.h"
+#include "Mx/MxOps.h"
+#include "Mx/MxDialect.h"
 #include "mlir/IR/OpImplementation.h"
 
 #define GET_OP_CLASSES
-#include "Hello/HelloOps.cpp.inc"
+#include "Mx/MxOps.cpp.inc"
