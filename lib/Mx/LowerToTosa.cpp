@@ -11,6 +11,8 @@
 #include "Mx/MxDialect.h"
 #include "Mx/MxOps.h"
 #include "Mx/MxPasses.h"
+#include "Mx/MxUtils.h"
+#include "Mx/TosaLegalizeUtils.h"
 
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
@@ -124,6 +126,132 @@ class TanhOpLowering : public OpRewritePattern<mx::TanhOp>{
   return success();
   }
 };
+
+class Conv2dOpLowering : public OpRewritePattern<mx::Conv2dOp>{
+  using OpRewritePattern<mx::Conv2dOp>::OpRewritePattern;
+  LogicalResult matchAndRewrite(mx::Conv2dOp op, PatternRewriter &rewriter) const final{
+    auto input = op.getInput();
+    auto weight = op.getWeight();
+    auto output = op.getResult();
+    auto outputType = llvm::dyn_cast<RankedTensorType>(output.getType());
+
+    auto inputTy = llvm::dyn_cast<RankedTensorType>(input.getType());
+    auto weightTy = llvm::dyn_cast<RankedTensorType>(weight.getType());
+    auto inputElemTy = inputTy.getElementType();
+    auto weightElemTy = weightTy.getElementType();
+    auto inputShape = mx::makeShapeMxCompatible(inputTy.getShape());
+    auto weightShape = mx::makeShapeMxCompatible(weightTy.getShape());
+    auto bias = op.getBias();
+    if (isa<mlir::NoneType>(op.getBias().getType())) {
+      //SmallVector<float> zeroVec(weightShape[0], 0);
+      //bias=std::optional<Value> temp = mlir::tosa::getConstTensor<float>(rewriter, op, zeroVec,
+      //                                   {static_cast<int32_t>(weightShape[0])}).value();
+      //bias=temp;
+      //std::optional<Value> temp = mlir::tosa::getConstTensor<float>(rewriter, op, zeroVec,
+      //                                   {static_cast<int32_t>(weightShape[0])}).value();
+      //bias=temp;
+    }
+    auto biasElemTy =
+      isa<mlir::FloatType>(inputElemTy) ? inputElemTy : rewriter.getI32Type();
+
+    SmallVector<int64_t> stride({1,1});
+
+    SmallVector<int64_t> padding(
+        {0, 0, 0, 0});
+
+    SmallVector<int64_t> dilation({1,1});
+
+    std::optional<Value> nchwToNhwcTransposeConst =
+      tosa::getConstTensor<int32_t>(rewriter, op,
+                                    /*vec=*/{0, 2, 3, 1},
+                                    /*shape=*/{static_cast<int32_t>(4)});
+    SmallVector<int64_t> transposedInputShape(
+      {inputShape[0], inputShape[2], inputShape[3], inputShape[1]});
+    auto transposedInputType = mlir::RankedTensorType::get(
+      mx::makeShapeLLVMCompatible(transposedInputShape), inputElemTy);
+    auto transposedInput =
+      rewriter
+          .create<mlir::tosa::TransposeOp>(
+              op->getLoc(),
+              llvm::dyn_cast<RankedTensorType>(transposedInputType), input,
+              nchwToNhwcTransposeConst.value())
+          .getResult();
+    
+    SmallVector<int64_t> transformedWeightShape;
+    RankedTensorType transformedWeightType;
+    Value transformedWeight;
+
+    int64_t outputCDim;
+    transformedWeightShape = {weightShape[0], weightShape[2], weightShape[3],
+                              weightShape[1]};
+    transformedWeightType = mlir::RankedTensorType::get(
+        mx::makeShapeLLVMCompatible(transformedWeightShape), weightElemTy);
+    transformedWeight =
+        rewriter
+            .create<mlir::tosa::TransposeOp>(
+                op->getLoc(),
+                llvm::dyn_cast<RankedTensorType>(transformedWeightType),weight,
+                nchwToNhwcTransposeConst.value())
+            .getResult();
+    outputCDim = transformedWeightShape[0];
+
+    int64_t outputHDim, outputWDim;
+    if (inputTy.hasStaticShape()) {
+      int64_t inputHDim = inputShape[2];
+      int64_t inputWDim = inputShape[3];
+      int64_t weightHDim = weightShape[2];
+      int64_t weightWDim = weightShape[3];
+      outputHDim = (inputHDim + padding[0] + padding[1] -
+                    dilation[0] * (weightHDim - 1) - 1) /
+                      stride[0] +
+                  1;
+      outputWDim = (inputWDim + padding[2] + padding[3] -
+                    dilation[1] * (weightWDim - 1) - 1) /
+                      stride[1] +
+                  1;
+    } else {
+      outputHDim = mx::kUnknownSize;
+      outputWDim = mx::kUnknownSize;
+    }
+    SmallVector<int64_t> outputShape = {transposedInputShape[0], outputHDim,
+                                      outputWDim, outputCDim};
+
+    auto convOpTy =
+      mlir::RankedTensorType::get(mx::makeShapeLLVMCompatible(outputShape), biasElemTy);
+
+    Value convOpResult;
+    convOpResult =
+        rewriter
+            .create<mlir::tosa::Conv2DOp>(op->getLoc(),
+                                    llvm::dyn_cast<RankedTensorType>(convOpTy),
+                                    transposedInput, transformedWeight, bias,
+                                    rewriter.getDenseI64ArrayAttr(padding),
+                                    rewriter.getDenseI64ArrayAttr(stride),
+                                    rewriter.getDenseI64ArrayAttr(dilation))
+            .getResult();
+    std::optional<Value> nhwcToNchwTransposeConst =
+      tosa::getConstTensor<int32_t>(rewriter, op,
+                                    /*vec=*/{0, 3, 1, 2},
+                                    /*shape=*/{static_cast<int32_t>(4)});
+    SmallVector<int64_t> transposedOutputShape(
+        {outputShape[0], outputShape[3], outputShape[1], outputShape[2]});
+    auto transposedOutputType = mlir::RankedTensorType::get(
+        mx::makeShapeLLVMCompatible(transposedOutputShape), biasElemTy);
+    auto transposedOutput =
+        rewriter
+            .create<mlir::tosa::TransposeOp>(
+                op->getLoc(),
+                llvm::dyn_cast<RankedTensorType>(transposedOutputType),
+                convOpResult, nhwcToNchwTransposeConst.value())
+            .getResult();
+
+    Value rescaledResult = transposedOutput;
+    rewriter.replaceOpWithNewOp<mlir::tosa::CastOp>(
+        op, outputType, rescaledResult);
+
+    return success();
+  }
+};
 // mx to tosa pass
 
 namespace{
@@ -147,7 +275,7 @@ void MxToTosaLowerPass::runOnOperation(){
                          mlir::memref::MemRefDialect, mlir::tensor::TensorDialect>();
 
     mlir::RewritePatternSet patterns(&getContext());
-    patterns.add<AddOpLowering, MulOpLowering, AddMulOpLowering, TransposeOpLowering, ReshapeOpLowering, TanhOpLowering>(&getContext());
+    patterns.add<AddOpLowering, MulOpLowering, AddMulOpLowering, TransposeOpLowering, ReshapeOpLowering, TanhOpLowering, Conv2dOpLowering>(&getContext());
 
     if (mlir::failed(mlir::applyPartialConversion(getOperation(), target,
                                                 std::move(patterns)))) {

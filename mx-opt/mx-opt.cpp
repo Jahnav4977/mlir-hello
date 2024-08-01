@@ -79,6 +79,8 @@
 #include "Mx/MxDialect.h"
 #include "Mx/MxOps.h"
 #include "Mx/MxPasses.h"
+#include "Mx/MxUtils.h"
+#include "Mx/TosaLegalizeUtils.h"
 
 namespace cl = llvm::cl;
 static cl::opt<std::string> inputFilename(cl::Positional,

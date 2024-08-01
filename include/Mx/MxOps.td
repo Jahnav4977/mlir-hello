@@ -165,4 +165,25 @@ def TanhOp : Mx_Op<"tanh",[Pure]>{
   let results = (outs Mx_Tensor:$output);
 }
 
+def Conv2dOp : Mx_Op<"conv2d", [Pure]>{
+  let summary = "Conv2d Operator";
+
+  let description = [{
+    performs convolution on 2d tensor.
+  }];
+
+  let arguments = (ins 
+    Mx_Tensor4D:$input,
+    4DTensorOf<[Mx_Weight]>:$weight,
+    Mx_Tensor1D:$bias,
+
+    Mx_IntArrayAttr4:$pad,
+    Mx_IntArrayAttr2:$stride,
+    Mx_IntArrayAttr2:$dilation
+  );
+  let results = (outs 
+    Mx_Tensor4D:$output
+  );
+}
+
 #endif // MX_OPS
