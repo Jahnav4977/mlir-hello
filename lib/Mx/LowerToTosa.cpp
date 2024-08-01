@@ -252,6 +252,208 @@ class Conv2dOpLowering : public OpRewritePattern<mx::Conv2dOp>{
     return success();
   }
 };
+
+template <typename OpT, typename TosaOpT>
+class ConvertPoolingBaseOp : public OpConversionPattern<OpT> {
+public:
+  using OpConversionPattern<OpT>::OpConversionPattern;
+  using OpAdaptor = typename OpT::Adaptor;
+
+  virtual LogicalResult processInputs(OpT op, OpAdaptor adaptor,
+                                      ConversionPatternRewriter &rewriter,
+                                      Value &input, DenseI64ArrayAttr &kernel,
+                                      DenseI64ArrayAttr &stride,
+                                      DenseI64ArrayAttr &pad,
+                                      Type &outputTy) const {
+    return rewriter.notifyMatchFailure(
+        op, "Unimplemented pooling input parsing function");
+  }
+
+  static int64_t getOutputDim(int64_t inputDim, int64_t kernelDim,
+                              int64_t stride, int64_t padBefore,
+                              int64_t padAfter) {
+    if (inputDim == mx::kUnknownSize) {
+      return mx::kUnknownSize;
+    } else {
+      int64_t dimSize =
+          inputDim + padBefore + padAfter - 1 * (kernelDim - 1) - 1;
+      return dimSize / stride + 1;
+    }
+  }
+
+  Value transposeTensor(OpT op, ConversionPatternRewriter &rewriter,
+                        Value input, ArrayRef<int32_t> transposeDims) const {
+    auto inputTy = llvm::dyn_cast<RankedTensorType>(input.getType());
+    auto inputElemTy = inputTy.getElementType();
+    auto inputShape = mx::makeShapeMxCompatible(inputTy.getShape());
+    auto inputRank = inputTy.getRank();
+
+    std::optional<Value> transposeDimsConst = tosa::getConstTensor<int32_t>(
+        rewriter, op,
+        /*vec=*/transposeDims,
+        /*shape=*/{static_cast<int32_t>(inputRank)});
+
+    SmallVector<int64_t> transposedInputShape;
+    for (auto &dim : transposeDims)
+      transposedInputShape.push_back(inputShape[dim]);
+    auto transposedInputType = mlir::RankedTensorType::get(
+        mx::makeShapeLLVMCompatible(transposedInputShape), inputElemTy);
+    return rewriter
+        .create<tosa::TransposeOp>(op->getLoc(), transposedInputType, input,
+                                   transposeDimsConst.value())
+        .getResult();
+  }
+
+  Value transposePoolingInputToHwc(OpT op,
+                                   ConversionPatternRewriter &rewriter,
+                                   Value input) const {
+    auto inputRank = llvm::dyn_cast<RankedTensorType>(input.getType()).getRank();
+
+    SmallVector<int32_t> nchwToNhwc4DTransposeDims({0, 2, 3, 1});
+    SmallVector<int32_t> chwToHwc3DTransposeDims({1, 2, 0});
+
+    return transposeTensor(op, rewriter, input,
+                           inputRank == 3 ? chwToHwc3DTransposeDims
+                                          : nchwToNhwc4DTransposeDims);
+  }
+
+  Value transposePoolingOutputToChw(OpT op,
+                                    ConversionPatternRewriter &rewriter,
+                                    Value input) const {
+    auto inputTy = llvm::dyn_cast<RankedTensorType>(input.getType());
+    auto inputRank = inputTy.getRank();
+
+    SmallVector<int32_t> nhwcToNchw4DTransposeDims({0, 3, 1, 2});
+    SmallVector<int32_t> hwcToChw3DTransposeDims({2, 0, 1});
+
+    return transposeTensor(op, rewriter, input,
+                           inputRank == 3 ? hwcToChw3DTransposeDims
+                                          : nhwcToNchw4DTransposeDims);
+  }
+
+  LogicalResult
+  matchAndRewrite(OpT op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value input;
+    DenseI64ArrayAttr kernel, stride, pad;
+    Type outputTy;
+
+    if (failed(processInputs(op, adaptor, rewriter, input, kernel, stride, pad,
+                             outputTy)))
+      return rewriter.notifyMatchFailure(
+          op, "Failed to process inputs for pooling");
+
+    Value pooledOutput;
+    pooledOutput = rewriter
+                         .create<TosaOpT>(op->getLoc(), outputTy, input, kernel,
+                                          stride, pad)
+                         .getResult();
+
+    auto transposedOutput =
+        ConvertPoolingBaseOp<OpT, TosaOpT>::transposePoolingOutputToChw(
+            op, rewriter, pooledOutput);
+
+    rewriter.replaceOpWithNewOp<tensor::CastOp>(
+        op,
+        llvm::dyn_cast<RankedTensorType>(op.getType()),
+        transposedOutput);
+
+    return success();
+
+  }
+};
+
+template <typename AtenOpT, typename tosaOp>
+static Type getOutputTypeForNonAdaptivePoolingOp(
+    RankedTensorType inputTy, SmallVectorImpl<int64_t> &kernelSize,
+    SmallVectorImpl<int64_t> &strideArray, SmallVectorImpl<int64_t> &padArray) {
+  auto inputShape = mx::makeShapeMxCompatible(inputTy.getShape());
+  auto inputRank = inputTy.getRank();
+  auto inputElemTy = inputTy.getElementType();
+
+  int64_t outputHDim = ConvertPoolingBaseOp<AtenOpT, tosaOp>::getOutputDim(
+      inputShape[inputRank - 2], kernelSize[0], strideArray[0], padArray[0],
+      padArray[0]);
+  int64_t outputWDim = ConvertPoolingBaseOp<AtenOpT, tosaOp>::getOutputDim(
+      inputShape[inputRank - 1], kernelSize[1], strideArray[1], padArray[1],
+      padArray[1]);
+  padArray[0] = (outputHDim - 1) * strideArray[0] +
+                1 * kernelSize[0] - 1 + 1 -
+                padArray[0] * 2 - inputShape[inputRank - 2];
+  padArray[1] = (outputWDim - 1) * strideArray[1] +
+                1 * kernelSize[1] - 1 + 1 -
+                padArray[1] * 2 - inputShape[inputRank - 1];
+  SmallVector<int64_t> outputShape;
+  if (inputRank > 3)
+    outputShape.push_back(inputShape[0]);
+  outputShape.push_back(outputHDim);
+  outputShape.push_back(outputWDim);
+  outputShape.push_back(inputShape[inputRank - 3]);
+  return mlir::RankedTensorType::get(mx::makeShapeLLVMCompatible(outputShape),
+                               inputElemTy);
+}
+
+// Checks the validity of pooling parameters and stores them in the respective
+// vector. Also, gets the output type for the pooling op.
+template <typename AtenOpT, typename tosaOp>
+static LogicalResult getOutputTypeAndPoolingParameters(
+    AtenOpT op, ConversionPatternRewriter &rewriter, Value inputXchw, Type &outputTy,
+    DenseI64ArrayAttr &kernel, DenseI64ArrayAttr &stride,
+    DenseI64ArrayAttr &pad) {
+
+  RankedTensorType inputTy = llvm::dyn_cast<RankedTensorType>(inputXchw.getType());
+  if (!inputTy)
+    return rewriter.notifyMatchFailure(
+        op, "Pooling op requires ranked tensor input");
+
+  auto inputRank = inputTy.getRank();
+  // Rank sanity check.
+  if (inputTy.getRank() != 4 && inputRank != 3)
+    return rewriter.notifyMatchFailure(
+        op, "NCHW->NHWC transpose requires 3D or 4D tensor");
+
+  SmallVector<int64_t, 2> kernelSizeInts(op.getKernel().begin(),op.getKernel().end());
+  SmallVector<int64_t> strideInts({1,1});
+  SmallVector<int64_t> paddingInts({0,0});
+  SmallVector<int64_t> padArr({0,0,0,0});
+
+  kernel = rewriter.getDenseI64ArrayAttr(kernelSizeInts);
+  stride = rewriter.getDenseI64ArrayAttr(strideInts);
+
+  outputTy = getOutputTypeForNonAdaptivePoolingOp<AtenOpT, tosaOp>(
+      inputTy, kernelSizeInts, strideInts, paddingInts);
+  padArr[1] = padArr[1] + paddingInts[0];
+  padArr[3] = padArr[3] + paddingInts[1];
+  pad = rewriter.getDenseI64ArrayAttr(
+      {padArr[0], padArr[1], padArr[2], padArr[3]});
+  return success();
+}
+
+class MaxPool2dOpLowering
+    : public ConvertPoolingBaseOp<mx::MaxPool2dOp, tosa::MaxPool2dOp> {
+public:
+  using ConvertPoolingBaseOp<mx::MaxPool2dOp,
+                                 tosa::MaxPool2dOp>::ConvertPoolingBaseOp;
+  LogicalResult processInputs(mx::MaxPool2dOp op, OpAdaptor adaptor,
+                              ConversionPatternRewriter &rewriter, Value &input,
+                              DenseI64ArrayAttr &kernel,
+                              DenseI64ArrayAttr &stride, DenseI64ArrayAttr &pad,
+                              Type &outputTy) const override {
+    // TOSA pooling only supports unit dilation.
+    if (failed(getOutputTypeAndPoolingParameters<mx::MaxPool2dOp,
+                                                 tosa::MaxPool2dOp>(
+            op, rewriter, adaptor.getInput(), outputTy, kernel,
+            stride, pad)))
+      return rewriter.notifyMatchFailure(
+          op, "invalid pooling parameters or input type");
+
+    // Transpose to xHWC
+    input = ConvertPoolingBaseOp<mx::MaxPool2dOp, tosa::MaxPool2dOp>::
+        transposePoolingInputToHwc(op, rewriter, adaptor.getInput());
+
+    return success();
+  }
+};
 // mx to tosa pass
 
 namespace{
@@ -275,7 +477,7 @@ void MxToTosaLowerPass::runOnOperation(){
                          mlir::memref::MemRefDialect, mlir::tensor::TensorDialect>();
 
     mlir::RewritePatternSet patterns(&getContext());
-    patterns.add<AddOpLowering, MulOpLowering, AddMulOpLowering, TransposeOpLowering, ReshapeOpLowering, TanhOpLowering, Conv2dOpLowering>(&getContext());
+    patterns.add<AddOpLowering, MulOpLowering, AddMulOpLowering, TransposeOpLowering, ReshapeOpLowering, TanhOpLowering, Conv2dOpLowering, MaxPool2dOpLowering>(&getContext());
 
     if (mlir::failed(mlir::applyPartialConversion(getOperation(), target,
                                                 std::move(patterns)))) {

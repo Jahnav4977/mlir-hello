@@ -186,4 +186,24 @@ def Conv2dOp : Mx_Op<"conv2d", [Pure]>{
   );
 }
 
+def MaxPool2dOp : Mx_Op<"maxpool2d",[Pure]>{
+  let summary = "MaxPool2d Operator";
+
+  let description = [{
+    performs maxpooling on 2d tensor.
+  }];
+
+  let arguments = (ins
+    Mx_Tensor4D:$input,
+
+    Mx_IntArrayAttr2:$kernel,
+    Mx_IntArrayAttr2:$stride,
+    Mx_IntArrayAttr4:$pad
+  );
+
+  let results = (outs
+    Mx_Tensor4D:$output
+  );
+}
+
 #endif // MX_OPS
