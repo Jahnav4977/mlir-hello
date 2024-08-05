@@ -14,10 +14,8 @@ def log(*args):
 
 def execute():
     with Context():
-        input = """func.func @test_tanh(%arg0: tensor<2x3xf64>) -> tensor<2x3xf64> attributes { llvm.emit_c_interface } {
-  %0 = "mx.tanh"(%arg0) : (tensor<2x3xf64>) -> tensor<2x3xf64>
-  return %0 : tensor<2x3xf64>
-}"""
+        with open('../Mx/tanhtest.mlir', 'r') as f:
+            input = f.read()
         hello_process = subprocess.run(
             ['../../build/bin/mx-opt'],
             input=input,

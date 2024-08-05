@@ -127,11 +127,11 @@ def ReshapeOp: Mx_Op<"reshape", [Pure]> {
 
   let arguments = (ins
     Mx_Tensor:$input1,
-    DenseI64ArrayAttr:$new_shape
+    DenseI64ArrayAttr:$shape
   );
 
   let results = (outs
-    Mx_Tensor:$output
+    Mx_RankedTensor:$output
   );
 }
 
@@ -203,6 +203,22 @@ def MaxPool2dOp : Mx_Op<"maxpool2d",[Pure]>{
 
   let results = (outs
     Mx_Tensor4D:$output
+  );
+}
+
+def LinearOp : Mx_Op<"linear",[Pure]>{
+  let summary = "Linear Operator";
+
+  let description = [{
+    performs linear flattening on tensor.
+  }];
+
+  let arguments = (ins 
+    Mx_Tensor2D:$input,
+    Mx_Tensor2D:$weight
+  );
+  let results = (outs 
+    Mx_Tensor2D:$output
   );
 }
 

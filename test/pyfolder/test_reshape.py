@@ -12,9 +12,9 @@ def log(*args):
     print(*args, file=sys.stderr)
     sys.stderr.flush()
 
-def execute():
+def execute_reshape():
     with Context():
-        with open('../Mx/addtest.mlir', 'r') as f:
+        with open('../Mx/reshapetest.mlir', 'r') as f:
             input = f.read()
         hello_process = subprocess.run(
             ['../../build/bin/mx-opt'],
@@ -25,31 +25,27 @@ def execute():
         
         mlir_LLVM_txt = hello_process.stderr
         module=Module.parse(mlir_LLVM_txt)
-    
-        arg1 = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]).astype(np.float64)
-        arg2 = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]).astype(np.float64)
+        print(module)
+        
+        arg1 = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]).astype(np.float32)
         arg1_memref_ptr = ctypes.pointer(
             ctypes.pointer(get_ranked_memref_descriptor(arg1))
         )
-        arg2_memref_ptr = ctypes.pointer(
-            ctypes.pointer(get_ranked_memref_descriptor(arg2))
-        )
-        res = np.array([[0, 0, 0], [0, 0, 0]]).astype(np.float64)
+        res = np.array([[0, 0], [0,0], [0, 0]]).astype(np.float32)
         res_memref_ptr = ctypes.pointer(ctypes.pointer(
-            make_nd_memref_descriptor(2, np.ctypeslib.as_ctypes_type(np.float64))()
+            make_nd_memref_descriptor(2, np.ctypeslib.as_ctypes_type(np.float32))()
         ))
         execution_engine=ExecutionEngine(module)
-        execution_engine.invoke("test_add", res_memref_ptr, arg1_memref_ptr, arg2_memref_ptr)
+        execution_engine.invoke("test_reshape", res_memref_ptr, arg1_memref_ptr)
         res = ranked_memref_to_numpy(res_memref_ptr[0])
         res_tensor=torch.from_numpy(res)
-        arg1_tensor=torch.from_numpy(arg1)
-        arg2_tensor=torch.from_numpy(arg2)
-        ans_tensor=arg1_tensor.add(arg2_tensor)
-        assert torch.allclose(res_tensor, ans_tensor), f"Expected {ans_tensor} but got {res_tensor}"
+        arg1_tensor = torch.from_numpy(arg1)
+        reshaped = arg1_tensor.reshape(3, 2)
+        assert torch.allclose(res_tensor, reshaped, atol=1e-5), f"Expected {reshaped} but got {res_tensor}"
 
-def test_answer():
-    execute()
+def test_reshape():
+    execute_reshape()
     
 
 if __name__ == "__main__":
-    test_answer()
+    test_reshape()

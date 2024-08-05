@@ -12,48 +12,47 @@ def log(*args):
     print(*args, file=sys.stderr)
     sys.stderr.flush()
 
-def execute_conv2d():
+def execute_linear():
     with Context():
-        with open('../Mx/conv2dtest.mlir', 'r') as f:
+        with open('../Mx/lineartest.mlir', 'r') as f:
             input = f.read()
-        mx_process = subprocess.run(
+        hello_process = subprocess.run(
             ['../../build/bin/mx-opt'],
             input=input,
             capture_output=True,
             encoding='ascii',
         )
         
-        mlir_LLVM_txt = mx_process.stderr
+        mlir_LLVM_txt = hello_process.stderr
         module=Module.parse(mlir_LLVM_txt)
-        arg0 = np.random.rand(3, 3, 10, 10).astype(np.float32)
-        arg1 = np.random.rand(3, 3, 2, 2).astype(np.float32)
-        arg2 = np.random.rand(3).astype(np.float32)
 
+        arg0 = np.random.rand(5, 2).astype(np.float32)
+        arg1 = np.random.rand(3, 2).astype(np.float32)
+        
         arg0_memref_ptr = ctypes.pointer(ctypes.pointer(get_ranked_memref_descriptor(arg0)))
         arg1_memref_ptr = ctypes.pointer(ctypes.pointer(get_ranked_memref_descriptor(arg1)))
-        arg2_memref_ptr = ctypes.pointer(ctypes.pointer(get_ranked_memref_descriptor(arg2)))
-
-        output_shape = (3, 3, 9, 9)
+        
+        output_shape = (5, 3)
         res = np.zeros(output_shape, dtype=np.float32)
         res_memref_ptr = ctypes.pointer(ctypes.pointer(make_nd_memref_descriptor(len(output_shape), np.ctypeslib.as_ctypes_type(np.float32))()))
-
-        execution_engine = ExecutionEngine(module)
-        execution_engine.invoke("test_conv2d", res_memref_ptr, arg0_memref_ptr, arg1_memref_ptr, arg2_memref_ptr)
-
+        execution_engine=ExecutionEngine(module)
+        execution_engine.invoke("test_linear", res_memref_ptr, arg0_memref_ptr, arg1_memref_ptr)
         res = ranked_memref_to_numpy(res_memref_ptr[0])
-        res_tensor = torch.from_numpy(res)
+        print(res)
+        res_tensor=torch.from_numpy(res)
+        print(res_tensor)
         arg0_tensor = torch.from_numpy(arg0)
         arg1_tensor = torch.from_numpy(arg1)
-        arg2_tensor = torch.from_numpy(arg2)
+        m=torch.nn.Linear(2,3,bias=False)
+        m.weight.data = arg1_tensor
+        ans_tensor=m(arg0_tensor)
+        print(ans_tensor)
+        assert torch.allclose(res_tensor, ans_tensor), f"Expected {ans_tensor} but got {res_tensor}" 
 
-        # Expected result using PyTorch
-        conv2d = torch.nn.functional.conv2d(arg0_tensor, arg1_tensor, bias=arg2_tensor, stride=1, padding=0, dilation=1)
-        assert torch.allclose(res_tensor, conv2d, atol=1e-5), f"Expected {conv2d} but got {res_tensor}"
-
-def test_conv2d():
-    execute_conv2d()
+def test_linear():
+    execute_linear()
     
 
 if __name__ == "__main__":
-    test_conv2d()
+    test_linear()
 

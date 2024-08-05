@@ -17,6 +17,8 @@
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
+#include "mlir/Dialect/Utils/ReshapeOpsUtils.h"
+#include "mlir/Dialect/Utils/StructuredOpsUtils.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -96,7 +98,7 @@ class ReshapeOpLowering : public OpRewritePattern<mx::ReshapeOp>{
   using OpRewritePattern<mx::ReshapeOp>::OpRewritePattern;
   LogicalResult matchAndRewrite(mx::ReshapeOp op, PatternRewriter &rewriter) const final{
     auto input = op.getInput1();
-    auto new_shape = op.getNewShapeAttr();
+    auto new_shape = op.getShape();
     auto output = op.getResult();
     auto outputType=llvm::dyn_cast<RankedTensorType>(output.getType());
     rewriter.replaceOpWithNewOp<mlir::tosa::ReshapeOp>(op,outputType,input,new_shape);
@@ -454,6 +456,387 @@ public:
     return success();
   }
 };
+
+template<typename OpT>
+class ConvertMatmulBaseOp : public OpConversionPattern<OpT> {
+public:
+  using OpConversionPattern<OpT>::OpConversionPattern;
+  using OpAdaptor = typename OpT::Adaptor;
+
+  virtual LogicalResult readMatMulInputs(OpT op, OpAdaptor adaptor,
+                                         ConversionPatternRewriter &rewriter,
+                                         Value &lhs, Value &rhs) const {
+    return rewriter.notifyMatchFailure(
+        op,
+        "Unimplemented matrix multiplication variant input parsing function");
+  }
+
+  LogicalResult performMatmul(OpT op, OpAdaptor adaptor,
+                              ConversionPatternRewriter &rewriter, Value &lhs,
+                              Value &rhs, Value &output) const{
+    auto lhsTy = llvm::dyn_cast<RankedTensorType>(lhs.getType());
+    auto rhsTy = llvm::dyn_cast<RankedTensorType>(rhs.getType());
+
+    auto lhsRank = lhsTy.getRank();
+    auto rhsRank = rhsTy.getRank();
+
+    auto lhsShape = mx::makeShapeMxCompatible(lhsTy.getShape());
+    auto rhsShape = mx::makeShapeMxCompatible(rhsTy.getShape());
+
+    auto lhsElemTy = lhsTy.getElementType();
+    auto rhsElemTy = rhsTy.getElementType();
+
+    auto maxInputRank = lhsRank > rhsRank ? lhsRank : rhsRank;
+
+    if (maxInputRank == 1)
+      maxInputRank++;
+
+    auto getRankBroadcastedShape = [&](Value tensor,
+                                       bool isRHS) -> SmallVector<int64_t> {
+      auto tensorTy = llvm::dyn_cast<TensorType>(tensor.getType());
+      auto tensorShape = mx::makeShapeMxCompatible(tensorTy.getShape());
+      auto tensorRank = tensorTy.getRank();
+
+      SmallVector<int64_t> bcastedShape;
+
+      auto bcastDims = maxInputRank - tensorRank;
+
+      if (isRHS && (tensorRank == 1) && bcastDims) {
+        // RHS with rank1 is special. It be synthetically transposed to dim[:-2]
+        for (int32_t i = 0; i < bcastDims - 1; i++)
+          bcastedShape.push_back(1);
+        bcastedShape.push_back(tensorShape[0]);
+        bcastedShape.push_back(1);
+      } else {
+        if (bcastDims > 0) { // rank broadcast
+          for (uint32_t i = 0; i < bcastDims; i++)
+            bcastedShape.push_back(1);
+        }
+        for (auto &dim : tensorShape)
+          bcastedShape.push_back(dim);
+      }
+      return bcastedShape;
+    };
+
+    auto lhsBroadcastedShape = getRankBroadcastedShape(lhs, false);
+    auto lhsBroadcastedTy = mlir::RankedTensorType::get(
+        mx::makeShapeLLVMCompatible(lhsBroadcastedShape), lhsElemTy);
+    auto rhsBroadcastedShape = getRankBroadcastedShape(rhs, true);
+    auto rhsBroadcastedTy = mlir::RankedTensorType::get(
+        mx::makeShapeLLVMCompatible(rhsBroadcastedShape), rhsElemTy);
+
+    auto rankBroadcastedLhs =
+        lhsRank == maxInputRank
+            ? lhs
+            : rewriter.create<tosa::ReshapeOp>(
+                  op->getLoc(),
+                  llvm::dyn_cast<RankedTensorType>(lhsBroadcastedTy),
+                  lhs, rewriter.getDenseI64ArrayAttr(lhsBroadcastedShape));
+
+    auto rankBroadcastedRhs =
+        rhsRank == maxInputRank
+            ? rhs
+            : rewriter.create<tosa::ReshapeOp>(
+                  op->getLoc(),
+                  llvm::dyn_cast<RankedTensorType>(rhsBroadcastedTy),
+                  rhs, rewriter.getDenseI64ArrayAttr(rhsBroadcastedShape));
+
+    // TOSA matmul is performed on two 3D inputs and generates a 3D output.
+    // Lower ranked tensors are dim-1 reshaped up to 3D
+    auto reshapeUpTo3DTensor = [&](Value tensor) -> Value {
+      auto tensorTy = llvm::dyn_cast<TensorType>(tensor.getType());
+      auto rank = tensorTy.getRank();
+
+      assert(rank <= 3 && "reshapeUpTo3D tensor must receive rank <= 3");
+      if (rank == 3)
+        return tensor;
+
+      auto shape = mx::makeShapeMxCompatible(tensorTy.getShape());
+      SmallVector<int64_t> newShape({1, 1, 1});
+
+      if (rank == 2) { // batchsize = 1
+        newShape[1] = shape[0];
+        newShape[2] = shape[1];
+      } else { // rank 1
+        newShape[2] = shape[0];
+      }
+      auto newType = mlir::RankedTensorType::get(mx::makeShapeLLVMCompatible(newShape),
+                                           tensorTy.getElementType());
+
+      return rewriter.create<tosa::ReshapeOp>(
+          op->getLoc(),
+          llvm::dyn_cast<RankedTensorType>(newType),
+          tensor, rewriter.getDenseI64ArrayAttr(newShape));
+    };
+
+    // Check if we need to perform the broadcast on batch dim
+    // Not needed if max rank < 3, or if maxrank == 3 and dim[0] matches
+    auto needsBatchDimBroadcast = [&]() -> bool {
+      if (maxInputRank < 3) {
+        return false;
+      } else {
+        if (maxInputRank == 3 &&
+            lhsBroadcastedShape[0] == rhsBroadcastedShape[0]) {
+          return false;
+        }
+        return true;
+      }
+    };
+
+    auto performBatchDimBroadcast = needsBatchDimBroadcast();
+
+    // Inputs to the tosa.matmul
+    Value matmulLhs, matmulRhs;
+
+    using TensorShape_t = struct {
+      int64_t dim;
+      int64_t shape;
+    };
+
+    // Transpose needs to done if transposeDims are not non-monotonically
+    // increasing. E.g. [0, 1, 2, 3]: No transpose [1, 0, 2, 3]: Transpose dim0
+    // and dim1 The order need not be sequential, since one or more dims may
+    // have been removed due to broadcasting.
+    auto isTransposeRequired = [](SmallVector<int32_t> transposedDims) -> bool {
+      int32_t lastDim = -1;
+      for (auto &dim : transposedDims) {
+        if (lastDim > dim)
+          return true;
+        lastDim = dim;
+      }
+      return false;
+    };
+
+    SmallVector<TensorShape_t> batchElems, lhsSqueezedElems, rhsSqueezedElems;
+
+    if (!performBatchDimBroadcast) {
+      // Simple with no broadcasting artifacts. Just reshape up to 3D
+      matmulLhs = reshapeUpTo3DTensor(rankBroadcastedLhs);
+      matmulRhs = reshapeUpTo3DTensor(rankBroadcastedRhs);
+
+    }
+
+    auto matmulLhsShape = mx::makeShapeMxCompatible(
+        llvm::dyn_cast<RankedTensorType>(matmulLhs.getType()).getShape());
+    auto matmulRhsShape = mx::makeShapeMxCompatible(
+        llvm::dyn_cast<RankedTensorType>(matmulRhs.getType()).getShape());
+
+    assert(matmulLhsShape[0] == matmulRhsShape[0] &&
+           "tosa.matmul needs same batchsize on LHS and RHS");
+
+    SmallVector<int64_t> matmulOutputShape(
+        {matmulLhsShape[0], matmulLhsShape[1], matmulRhsShape[2]});
+
+    Type outputElemTy;
+    if (isa<mlir::FloatType>(lhsElemTy)) {
+      outputElemTy = lhsElemTy;
+    } else { // qint8 emits i32 matmul output
+      outputElemTy = rewriter.getIntegerType(32);
+    }
+
+    auto mmOutputTy = mlir::RankedTensorType::get(
+        mx::makeShapeLLVMCompatible(matmulOutputShape), outputElemTy);
+
+    auto mmOpResult =
+        rewriter
+            .create<tosa::MatMulOp>(
+                op->getLoc(),
+                llvm::dyn_cast<RankedTensorType>(mmOutputTy),
+                matmulLhs, matmulRhs)
+            .getResult();
+
+    // Perform the reshape to output shape. This is always required unless max
+    // input rank=3 and there was no broadcasting, in which case the tosa.matmul
+    // output itself is correctly shaped.
+    bool performOpReshape = !(maxInputRank == 3 && !performBatchDimBroadcast);
+
+    if (performOpReshape) {
+      auto computeOpShape = [&](SmallVector<int64_t> &reshapedOpShape,
+                                SmallVector<int32_t> &transposedOpDims,
+                                SmallVector<int64_t> &transposedOpShapes) {
+        if (maxInputRank == 1)
+          return;
+
+        if (maxInputRank == 2) {
+          if (lhsRank == 2)
+            reshapedOpShape.push_back(lhsShape[0]);
+          if (rhsRank == 2)
+            reshapedOpShape.push_back(rhsShape[1]);
+          return;
+        }
+
+      };
+      SmallVector<int64_t> reshapedOpShape, transposedOpShape;
+      SmallVector<int32_t> transposedOpDims;
+
+      computeOpShape(reshapedOpShape, transposedOpDims, transposedOpShape);
+
+      bool opNeedsTranspose = isTransposeRequired(transposedOpDims);
+
+      auto reshapedOpType = mlir::RankedTensorType::get(
+          mx::makeShapeLLVMCompatible(reshapedOpShape), outputElemTy);
+      auto reshapedOp = rewriter.create<tosa::ReshapeOp>(
+          op->getLoc(),
+          llvm::dyn_cast<RankedTensorType>(reshapedOpType),
+          mmOpResult, rewriter.getDenseI64ArrayAttr(reshapedOpShape));
+
+      if (opNeedsTranspose) {
+
+        std::optional<Value> transposedOpShapeConst =
+            tosa::getConstTensor<int32_t>(
+                rewriter, op,
+                /*vec=*/transposedOpDims,
+                /*shape=*/{static_cast<int32_t>(transposedOpDims.size())});
+
+        auto transposedOpType = mlir::RankedTensorType::get(
+            mx::makeShapeLLVMCompatible(transposedOpShape), outputElemTy);
+        output = rewriter
+                     .create<tosa::TransposeOp>(
+                         op->getLoc(),
+                         llvm::dyn_cast<RankedTensorType>(transposedOpType),
+                         reshapedOp.getResult(), transposedOpShapeConst.value())
+                     .getResult();
+
+      } else {
+        output = reshapedOp.getResult();
+      }
+    }
+    return success();
+  }
+  virtual LogicalResult
+  matchAndRewrite(OpT op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+
+    Value lhs, rhs;
+
+    if (failed(readMatMulInputs(op, adaptor, rewriter, lhs, rhs)))
+      return rewriter.notifyMatchFailure(op, "Failed to read matmul inputs");
+
+    Value output;
+
+    if (failed(performMatmul(op, adaptor, rewriter, lhs, rhs, output)))
+      return rewriter.notifyMatchFailure(op,
+                                         "Failed to perform matmul operation");
+
+    rewriter.replaceOpWithNewOp<tensor::CastOp>(
+        op,
+        llvm::dyn_cast<RankedTensorType>(op.getType()),
+        output);
+
+    return success();
+  }
+};
+
+template <typename OpT>
+class ConvertMatMulOp : public ConvertMatmulBaseOp<OpT> {
+public:
+  using ConvertMatmulBaseOp<OpT>::ConvertMatmulBaseOp;
+  using OpAdaptor = typename OpT::Adaptor;
+  LogicalResult readMatMulInputs(OpT op, OpAdaptor adaptor,
+                                 ConversionPatternRewriter &rewriter,
+                                 Value &lhs, Value &rhs) const override {
+    lhs = adaptor.getSelf();
+    auto lhsTy = llvm::dyn_cast<RankedTensorType>(lhs.getType());
+
+    rhs = adaptor.getOther();
+    auto rhsTy = llvm::dyn_cast<RankedTensorType>(rhs.getType());
+
+    if (!lhsTy || !rhsTy)
+      return rewriter.notifyMatchFailure(
+          op, "Only ranked tensor types supported in TOSA matmul");
+
+    return success();
+  }
+};
+
+// Implements handling of aten.linear op.
+class LinearOpLowering : public ConvertMatmulBaseOp<mx::LinearOp>{
+public:
+  using ConvertMatmulBaseOp<mx::LinearOp>::ConvertMatmulBaseOp;
+  using OpAdaptor = typename mx::LinearOp::Adaptor;
+  LogicalResult readMatMulInputs(mx::LinearOp op, OpAdaptor adaptor,
+                                 ConversionPatternRewriter &rewriter,
+                                 Value &lhs, Value &rhs) const override {
+    lhs = adaptor.getInput();
+    auto lhsTy = llvm::dyn_cast<RankedTensorType>(lhs.getType());
+
+    rhs = adaptor.getWeight();
+    auto rhsTy = llvm::dyn_cast<RankedTensorType>(rhs.getType());
+
+    if (!lhsTy || !rhsTy)
+      return rewriter.notifyMatchFailure(
+          op, "Only ranked tensor types supported in TOSA matmul");
+
+    auto lhsRank = lhsTy.getRank();
+    auto rhsRank = rhsTy.getRank();
+
+    if (lhsRank != 2 && lhsRank != 3)
+      return op.emitError("aten.Linear called but input rank not 2 or 3");
+    if (rhsRank != 2 && rhsRank != 3)
+      return op.emitError("aten.Linear called but weight rank not 2 or 3");
+
+    // Protection against crash due to unguarded code in TOSA->LinAlg.
+    // TODO: This should be handled in TOSA->LinAlg instead.
+    if (!lhsTy.hasStaticShape() || !rhsTy.hasStaticShape())
+      return rewriter.notifyMatchFailure(
+          op, "aten.Linear needs statically shaped input");
+
+    return success();
+  }
+
+  LogicalResult
+  matchAndRewrite(mx::LinearOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value lhs, rhs;
+
+    if (failed(readMatMulInputs(op, adaptor, rewriter, lhs, rhs)))
+      return rewriter.notifyMatchFailure(op, "Failed to read matmul inputs");
+
+
+    auto rhsTy = llvm::dyn_cast<RankedTensorType>(rhs.getType());
+    auto rhsRank = rhsTy.getRank();
+    auto rhsShape = mx::makeShapeMxCompatible(rhsTy.getShape());
+    auto rhsElemTy = rhsTy.getElementType();
+
+    // Create a non-const shape array to transpose dims.
+    SmallVector<int64_t> transposedRhsShape;
+    for (auto &shape : rhsShape)
+      transposedRhsShape.push_back(shape);
+    SmallVector<int32_t> transposedRhsDims;
+    for (int32_t i = 0; i < rhsRank; i++)
+      transposedRhsDims.push_back(i);
+
+    // Swap the last two dims.
+    std::swap(transposedRhsShape[rhsRank - 1], transposedRhsShape[rhsRank - 2]);
+    std::swap(transposedRhsDims[rhsRank - 1], transposedRhsDims[rhsRank - 2]);
+
+    std::optional<Value> transposedRhsShapeConst =
+
+        tosa::getConstTensor<int32_t>(
+            rewriter, op,
+            /*vec=*/transposedRhsDims,
+            /*shape=*/{static_cast<int32_t>(transposedRhsDims.size())});
+
+    auto transposedRhsType = mlir::RankedTensorType::get(
+        mx::makeShapeLLVMCompatible(transposedRhsShape), rhsElemTy);
+    rhs = rewriter.create<tosa::TransposeOp>(
+        op->getLoc(),
+        llvm::dyn_cast<RankedTensorType>(transposedRhsType),
+        rhs, transposedRhsShapeConst.value());
+
+    Value matmulOutput;
+    if (failed(
+            this->performMatmul(op, adaptor, rewriter, lhs, rhs, matmulOutput)))
+      return rewriter.notifyMatchFailure(op,
+                                         "Failed to perform matmul operation");
+    rewriter.replaceOpWithNewOp<tensor::CastOp>(
+        op,
+        llvm::dyn_cast<RankedTensorType>((op.getType())),
+        matmulOutput);
+
+    return success();
+  }
+};
 // mx to tosa pass
 
 namespace{
@@ -477,7 +860,7 @@ void MxToTosaLowerPass::runOnOperation(){
                          mlir::memref::MemRefDialect, mlir::tensor::TensorDialect>();
 
     mlir::RewritePatternSet patterns(&getContext());
-    patterns.add<AddOpLowering, MulOpLowering, AddMulOpLowering, TransposeOpLowering, ReshapeOpLowering, TanhOpLowering, Conv2dOpLowering, MaxPool2dOpLowering>(&getContext());
+    patterns.add<AddOpLowering, MulOpLowering, AddMulOpLowering, TransposeOpLowering, ReshapeOpLowering, TanhOpLowering, Conv2dOpLowering, MaxPool2dOpLowering, LinearOpLowering>(&getContext());
 
     if (mlir::failed(mlir::applyPartialConversion(getOperation(), target,
                                                 std::move(patterns)))) {

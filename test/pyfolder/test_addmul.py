@@ -21,10 +21,8 @@ def lowerToLLVM(module):
 
 def execute():
     with Context():
-        input = """func.func @test_addmul(%arg0: tensor<2x3xf64>, %arg1: tensor<2x3xf64>, %arg2: tensor<2x3xf64>) -> tensor<2x3xf64> attributes { llvm.emit_c_interface } {
-  %0 = "mx.addmul"(%arg0, %arg1, %arg2) : (tensor<2x3xf64>, tensor<2x3xf64>, tensor<2x3xf64>) -> tensor<2x3xf64>
-  return %0 : tensor<2x3xf64>
-}"""
+        with open('../Mx/addmultest.mlir', 'r') as f:
+            input = f.read()
         hello_process = subprocess.run(
             ['../../build/bin/mx-opt'],
             input=input,

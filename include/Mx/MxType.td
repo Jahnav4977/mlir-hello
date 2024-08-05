@@ -25,6 +25,8 @@ def Mx_Weight : AnyTypeOf<[Mx_Int4, Mx_Int8, AnyFloat]>;
 
 def Mx_Tensor : TensorOf<[Mx_AnyNumber]>;
 
+def Mx_RankedTensor : RankedTensorOf<[Mx_AnyNumber]>;
+
 def Mx_Int32Or64 : AnyTypeOf<[Mx_Int32,
                    	        Mx_Int64]>;
 
@@ -36,6 +38,7 @@ def Mx_FloatTensor : TensorOf<[AnyFloat]>;
 def Mx_UnrankedTensor : UnrankedTensorOf<[Mx_AnyNumber]>;
 
 def Mx_Tensor1D : AnyTypeOf<[Mx_UnrankedTensor, 1DTensorOf<[Mx_AnyNumber]>], "1-d tensor", "::mlir::TensorType">;
+def Mx_Tensor2D : AnyTypeOf<[Mx_UnrankedTensor, 2DTensorOf<[Mx_AnyNumber]>], "2-d tensor", "::mlir::TensorType">;
 def Mx_Tensor4D : AnyTypeOf<[Mx_UnrankedTensor, 4DTensorOf<[Mx_AnyNumber]>], "4-d tensor", "::mlir::TensorType">;
 
 def Mx_Tensor1Dto6D : AnyTypeOf<[

@@ -35,6 +35,9 @@
 #include "mlir/Dialect/MemRef/Transforms/AllocationOpInterfaceImpl.h"
 #include "mlir/Dialect/Tosa/IR/ShardingInterfaceImpl.h"
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
+#include "mlir/Dialect/Utils/ReshapeOpsUtils.h"
+#include "mlir/Dialect/Utils/StructuredOpsUtils.h"
+#include "mlir/Conversion/TosaToLinalg/TosaToLinalg.h"
 #include "mlir/Dialect/Transform/IR/TransformDialect.h"
 #include "mlir/Dialect/Transform/PDLExtension/PDLExtension.h"
 #include <iostream>
@@ -120,37 +123,40 @@ int loadAndProcessMLIR(mlir::MLIRContext &context,
   if (mlir::failed(mlir::applyPassManagerCLOptions(passManager)))
     return 4;
   
+  // This pass lowers the mx dialect to tosa, the pass should be registered and coded by us.
   passManager.addPass(mx::createLowerToTosaPass());
+  // this pass lowers const from tosa to arith
   passManager.addPass(mlir::tosa::createTosaToArith());
+  // this pass lowers reshape op from tosa to tensor
+  passManager.addPass(mlir::tosa::createTosaToTensor());
+  // these 2 passes lower remaining tosa ops to linalg
   passManager.addNestedPass<mlir::func::FuncOp>(mlir::tosa::createTosaToLinalgNamed());
   passManager.addNestedPass<mlir::func::FuncOp>(mlir::tosa::createTosaToLinalg());
   //Buferrization is mandatory before using linalg to affine loops pass
   mlir::bufferization::OneShotBufferizationOptions bufferizationOptions;
-  //bufferizationOptions.bufferizeFunctionBoundaries = true;
   bufferizationOptions.allowUnknownOps = 1;
   passManager.addPass(mlir::bufferization::createOneShotBufferizePass());
-  //mlir::bufferization::BufferDeallocationPipelineOptions deallocationOptions;
-  //mlir::bufferization::buildBufferDeallocationPipeline(passManager,
-  //                                                     deallocationOptions);
-  //passManager.addNestedPass<mlir::func::FuncOp>(mlir::bufferization::createBufferDeallocationPass());
+  //Partial bufferization passes like func bufferize shouldn't be used before one shot bufferize
   passManager.addPass(mlir::func::createFuncBufferizePass());
-  passManager.addPass(mlir::createConvertVectorToSCFPass());
+  //This pass lowers linalg ops to affine dialect
   passManager.addNestedPass<mlir::func::FuncOp>(mlir::createConvertLinalgToAffineLoopsPass());
+  //This pass lowers the ir further to memref and scf
   passManager.addNestedPass<mlir::func::FuncOp>(mlir::createLowerAffinePass());
+  //This pass lowers scf to cf
   passManager.addPass(mlir::createConvertSCFToCFPass());
   //Cannonicalizer pass is used to clean ir.
   passManager.addPass(mlir::createCanonicalizerPass());
-  
+  //This pass lowers ops like view,subview etc which are produced after ops like reshape
+  passManager.addPass(mlir::memref::createExpandStridedMetadataPass());
+  //These remaining passes lower all the respective dialects to llvm
   passManager.addPass(mlir::createConvertMathToLLVMPass());
   passManager.addPass(mlir::createConvertMathToLibmPass());
   passManager.addPass(mlir::createArithToLLVMConversionPass());
   passManager.addPass(mlir::createConvertFuncToLLVMPass());
   passManager.addPass(mlir::createConvertControlFlowToLLVMPass());
   passManager.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
-  passManager.addPass(mlir::createConvertIndexToLLVMPass());
   //converts all unrealizedcasts to llvm
   passManager.addPass(mlir::createReconcileUnrealizedCastsPass());
-  
   if (mlir::failed(passManager.run(*module))) {
     return 4;
   }
