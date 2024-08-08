@@ -415,7 +415,7 @@ static LogicalResult getOutputTypeAndPoolingParameters(
         op, "NCHW->NHWC transpose requires 3D or 4D tensor");
 
   SmallVector<int64_t, 2> kernelSizeInts(op.getKernel().begin(),op.getKernel().end());
-  SmallVector<int64_t> strideInts({1,1});
+  SmallVector<int64_t, 2> strideInts(op.getStride().begin(),op.getStride().end());
   SmallVector<int64_t> paddingInts({0,0});
   SmallVector<int64_t> padArr({0,0,0,0});
 
