@@ -125,8 +125,6 @@ int loadAndProcessMLIR(mlir::MLIRContext &context,
   
   // This pass lowers the mx dialect to tosa, the pass should be registered and coded by us.
   passManager.addPass(mx::createLowerToTosaPass());
-  // this pass lowers const from tosa to arith
-  passManager.addPass(mlir::tosa::createTosaToArith());
   // this pass lowers reshape op from tosa to tensor
   passManager.addPass(mlir::tosa::createTosaToTensor());
   // these 2 passes lower remaining tosa ops to linalg
@@ -149,11 +147,8 @@ int loadAndProcessMLIR(mlir::MLIRContext &context,
   //This pass lowers ops like view,subview etc which are produced after ops like reshape
   passManager.addPass(mlir::memref::createExpandStridedMetadataPass());
   //These remaining passes lower all the respective dialects to llvm
-  passManager.addPass(mlir::createConvertMathToLLVMPass());
   passManager.addPass(mlir::createConvertMathToLibmPass());
-  passManager.addPass(mlir::createArithToLLVMConversionPass());
   passManager.addPass(mlir::createConvertFuncToLLVMPass());
-  passManager.addPass(mlir::createConvertControlFlowToLLVMPass());
   passManager.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
   //converts all unrealizedcasts to llvm
   passManager.addPass(mlir::createReconcileUnrealizedCastsPass());

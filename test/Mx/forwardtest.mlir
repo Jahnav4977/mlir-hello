@@ -1,3 +1,4 @@
+// ./build/bin/mx-opt --mlir-print-ir-after-all ./test/Mx/forwardtest.mlir
 func.func @test_forward(%arg0: tensor<1x1x28x28xf32>, %arg1: tensor<20x1x5x5xf32>, %arg2: tensor<20xf32>, %arg3:tensor<50x20x5x5xf32>, %arg4:tensor<50xf32>, %arg5:tensor<500x800xf32>, %arg6:tensor<10x500xf32>) -> tensor<1x10xf32> attributes { llvm.emit_c_interface } {
   %0 = "mx.conv2d"(%arg0, %arg1, %arg2) { dilation = array<i64: 1,1>, pad = array<i64: 0,0,0,0>, stride = array<i64: 1,1>} : (tensor<1x1x28x28xf32>, tensor<20x1x5x5xf32>, tensor<20xf32>) -> tensor<1x20x24x24xf32>
   %1 = "mx.tanh"(%0) : (tensor<1x20x24x24xf32>) -> (tensor<1x20x24x24xf32>)

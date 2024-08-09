@@ -1,13 +1,6 @@
+./build/bin/mx-opt --mlir-print-ir-after-all ./test/Mx/reshapetest2.mlir 2> ./test/IR_Dump/reshapetest2.txt
+
 // -----// IR Dump After {anonymous}::MxToTosaLowerPass () //----- //
-module {
-  func.func @test_reshape(%arg0: tensor<2x3xf32>) -> tensor<1x2x3xf32> attributes {llvm.emit_c_interface} {
-    %0 = tosa.reshape %arg0 {new_shape = array<i64: 1, 2, 3>} : (tensor<2x3xf32>) -> tensor<1x2x3xf32>
-    return %0 : tensor<1x2x3xf32>
-  }
-}
-
-
-// -----// IR Dump After TosaToArith (tosa-to-arith) //----- //
 module {
   func.func @test_reshape(%arg0: tensor<2x3xf32>) -> tensor<1x2x3xf32> attributes {llvm.emit_c_interface} {
     %0 = tosa.reshape %arg0 {new_shape = array<i64: 1, 2, 3>} : (tensor<2x3xf32>) -> tensor<1x2x3xf32>
@@ -126,22 +119,6 @@ module {
 }
 
 
-// -----// IR Dump After ConvertMathToLLVMPass (convert-math-to-llvm) //----- //
-module {
-  func.func @test_reshape(%arg0: memref<2x3xf32>) -> memref<1x2x3xf32> attributes {llvm.emit_c_interface} {
-    %c6 = arith.constant 6 : index
-    %c0 = arith.constant 0 : index
-    %c3 = arith.constant 3 : index
-    %c1 = arith.constant 1 : index
-    %base_buffer, %offset, %sizes:2, %strides:2 = memref.extract_strided_metadata %arg0 : memref<2x3xf32> -> memref<f32>, index, index, index, index, index
-    %reinterpret_cast = memref.reinterpret_cast %base_buffer to offset: [%c0], sizes: [1, 2, 3], strides: [%c6, %c3, %c1] : memref<f32> to memref<1x2x3xf32, strided<[?, ?, ?], offset: ?>>
-    %alloc = memref.alloc() {alignment = 64 : i64} : memref<1x2x3xf32>
-    memref.copy %reinterpret_cast, %alloc : memref<1x2x3xf32, strided<[?, ?, ?], offset: ?>> to memref<1x2x3xf32>
-    return %alloc : memref<1x2x3xf32>
-  }
-}
-
-
 // -----// IR Dump After ConvertMathToLibm (convert-math-to-libm) //----- //
 module {
   func.func @test_reshape(%arg0: memref<2x3xf32>) -> memref<1x2x3xf32> attributes {llvm.emit_c_interface} {
@@ -158,70 +135,7 @@ module {
 }
 
 
-// -----// IR Dump After ArithToLLVMConversionPass (convert-arith-to-llvm) //----- //
-module {
-  func.func @test_reshape(%arg0: memref<2x3xf32>) -> memref<1x2x3xf32> attributes {llvm.emit_c_interface} {
-    %0 = llvm.mlir.constant(6 : index) : i64
-    %1 = builtin.unrealized_conversion_cast %0 : i64 to index
-    %2 = llvm.mlir.constant(0 : index) : i64
-    %3 = builtin.unrealized_conversion_cast %2 : i64 to index
-    %4 = llvm.mlir.constant(3 : index) : i64
-    %5 = builtin.unrealized_conversion_cast %4 : i64 to index
-    %6 = llvm.mlir.constant(1 : index) : i64
-    %7 = builtin.unrealized_conversion_cast %6 : i64 to index
-    %base_buffer, %offset, %sizes:2, %strides:2 = memref.extract_strided_metadata %arg0 : memref<2x3xf32> -> memref<f32>, index, index, index, index, index
-    %reinterpret_cast = memref.reinterpret_cast %base_buffer to offset: [%3], sizes: [1, 2, 3], strides: [%1, %5, %7] : memref<f32> to memref<1x2x3xf32, strided<[?, ?, ?], offset: ?>>
-    %alloc = memref.alloc() {alignment = 64 : i64} : memref<1x2x3xf32>
-    memref.copy %reinterpret_cast, %alloc : memref<1x2x3xf32, strided<[?, ?, ?], offset: ?>> to memref<1x2x3xf32>
-    return %alloc : memref<1x2x3xf32>
-  }
-}
-
-
 // -----// IR Dump After ConvertFuncToLLVMPass (convert-func-to-llvm) //----- //
-module {
-  llvm.func @test_reshape(%arg0: !llvm.ptr, %arg1: !llvm.ptr, %arg2: i64, %arg3: i64, %arg4: i64, %arg5: i64, %arg6: i64) -> !llvm.struct<(ptr, ptr, i64, array<3 x i64>, array<3 x i64>)> attributes {llvm.emit_c_interface} {
-    %0 = llvm.mlir.undef : !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)>
-    %1 = llvm.insertvalue %arg0, %0[0] : !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)> 
-    %2 = llvm.insertvalue %arg1, %1[1] : !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)> 
-    %3 = llvm.insertvalue %arg2, %2[2] : !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)> 
-    %4 = llvm.insertvalue %arg3, %3[3, 0] : !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)> 
-    %5 = llvm.insertvalue %arg5, %4[4, 0] : !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)> 
-    %6 = llvm.insertvalue %arg4, %5[3, 1] : !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)> 
-    %7 = llvm.insertvalue %arg6, %6[4, 1] : !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)> 
-    %8 = builtin.unrealized_conversion_cast %7 : !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)> to memref<2x3xf32>
-    %9 = llvm.mlir.constant(6 : index) : i64
-    %10 = builtin.unrealized_conversion_cast %9 : i64 to index
-    %11 = llvm.mlir.constant(0 : index) : i64
-    %12 = builtin.unrealized_conversion_cast %11 : i64 to index
-    %13 = llvm.mlir.constant(3 : index) : i64
-    %14 = builtin.unrealized_conversion_cast %13 : i64 to index
-    %15 = llvm.mlir.constant(1 : index) : i64
-    %16 = builtin.unrealized_conversion_cast %15 : i64 to index
-    %base_buffer, %offset, %sizes:2, %strides:2 = memref.extract_strided_metadata %8 : memref<2x3xf32> -> memref<f32>, index, index, index, index, index
-    %reinterpret_cast = memref.reinterpret_cast %base_buffer to offset: [%12], sizes: [1, 2, 3], strides: [%10, %14, %16] : memref<f32> to memref<1x2x3xf32, strided<[?, ?, ?], offset: ?>>
-    %alloc = memref.alloc() {alignment = 64 : i64} : memref<1x2x3xf32>
-    %17 = builtin.unrealized_conversion_cast %alloc : memref<1x2x3xf32> to !llvm.struct<(ptr, ptr, i64, array<3 x i64>, array<3 x i64>)>
-    memref.copy %reinterpret_cast, %alloc : memref<1x2x3xf32, strided<[?, ?, ?], offset: ?>> to memref<1x2x3xf32>
-    llvm.return %17 : !llvm.struct<(ptr, ptr, i64, array<3 x i64>, array<3 x i64>)>
-  }
-  llvm.func @_mlir_ciface_test_reshape(%arg0: !llvm.ptr, %arg1: !llvm.ptr) attributes {llvm.emit_c_interface} {
-    %0 = llvm.load %arg1 : !llvm.ptr -> !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)>
-    %1 = llvm.extractvalue %0[0] : !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)> 
-    %2 = llvm.extractvalue %0[1] : !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)> 
-    %3 = llvm.extractvalue %0[2] : !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)> 
-    %4 = llvm.extractvalue %0[3, 0] : !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)> 
-    %5 = llvm.extractvalue %0[3, 1] : !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)> 
-    %6 = llvm.extractvalue %0[4, 0] : !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)> 
-    %7 = llvm.extractvalue %0[4, 1] : !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)> 
-    %8 = llvm.call @test_reshape(%1, %2, %3, %4, %5, %6, %7) : (!llvm.ptr, !llvm.ptr, i64, i64, i64, i64, i64) -> !llvm.struct<(ptr, ptr, i64, array<3 x i64>, array<3 x i64>)>
-    llvm.store %8, %arg0 : !llvm.struct<(ptr, ptr, i64, array<3 x i64>, array<3 x i64>)>, !llvm.ptr
-    llvm.return
-  }
-}
-
-
-// -----// IR Dump After ConvertControlFlowToLLVMPass (convert-cf-to-llvm) //----- //
 module {
   llvm.func @test_reshape(%arg0: !llvm.ptr, %arg1: !llvm.ptr, %arg2: i64, %arg3: i64, %arg4: i64, %arg5: i64, %arg6: i64) -> !llvm.struct<(ptr, ptr, i64, array<3 x i64>, array<3 x i64>)> attributes {llvm.emit_c_interface} {
     %0 = llvm.mlir.undef : !llvm.struct<(ptr, ptr, i64, array<2 x i64>, array<2 x i64>)>
